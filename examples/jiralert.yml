@@ -46,6 +46,13 @@ receivers:
       customfield_10002: { "value": "red" }
       # MultiSelect
       customfield_10003: [{"value": "red" }, {"value": "blue" }, {"value": "green" }]
+    # which field to store Group information in, for de-duplication purposes. Required.
+    # Type of field needs to be "Labels".
+    group_field_id: customfield_10125
+    # Name of above field, for use in search queries. Required.
+    group_field_name: Alertmanager Group
+    # which alert group label to use as the jira label. Required.
+    label_key: category
 
 # File containing template definitions. Required.
 template: jiralert.tmpl
