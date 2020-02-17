@@ -2,13 +2,14 @@ package notify
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
 	"io/ioutil"
-	"reflect"
 	"strings"
 	"time"
+
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 
 	"github.com/free/jiralert/pkg/config"
 	"github.com/free/jiralert/pkg/template"
@@ -46,35 +47,44 @@ func (r *Receiver) Notify(data *alertmanager.Data, logger log.Logger) (bool, err
 		return false, err
 	}
 	// Looks like an ALERT metric name, with spaces removed.
-	issueLabel := toIssueLabel(data.GroupLabels)
-
-	issue, retry, err := r.search(project, issueLabel, logger)
+	groupID := toGroupID(data.GroupLabels)
+	issue, retry, err := r.search(project, groupID, logger)
 	if err != nil {
 		return retry, err
+	}
+
+	issueLabel, err := toIssueLabel(r.conf.LabelKey, data.GroupLabels)
+	if err != nil {
+		level.Warn(logger).Log("msg", err)
 	}
 
 	if issue != nil {
 		// The set of JIRA status categories is fixed, this is a safe check to make.
 		if issue.Fields.Status.StatusCategory.Key != "done" {
 			// Issue is in a "to do" or "in progress" state, all done here.
-			level.Debug(logger).Log("msg", "issue is unresolved, nothing to do", "key", issue.Key, "label", issueLabel)
+			level.Debug(logger).Log("msg", "issue is unresolved, nothing to do", "key", issue.Key, "label", groupID)
 			return false, nil
 		}
 		if r.conf.WontFixResolution != "" && issue.Fields.Resolution != nil &&
 			issue.Fields.Resolution.Name == r.conf.WontFixResolution {
 			// Issue is resolved as "Won't Fix" or equivalent, log a message just in case.
-			level.Info(logger).Log("msg", "issue was resolved as won't fix, not reopening", "key", issue.Key, "label", issueLabel, "resolution", issue.Fields.Resolution.Name)
+			level.Info(logger).Log("msg", "issue was resolved as won't fix, not reopening", "key", issue.Key, "label", groupID, "resolution", issue.Fields.Resolution.Name)
 			return false, nil
 		}
 
 		resolutionTime := time.Time(issue.Fields.Resolutiondate)
 		if resolutionTime.Add(time.Duration(*r.conf.ReopenDuration)).After(time.Now()) {
-			level.Info(logger).Log("msg", "issue was recently resolved, reopening", "key", issue.Key, "label", issueLabel, "resolution_time", resolutionTime.Format(time.RFC3339), "reopen_duration", *r.conf.ReopenDuration)
+			level.Info(logger).Log("msg", "issue was recently resolved, reopening", "key", issue.Key, "label", groupID, "resolution_time", resolutionTime.Format(time.RFC3339), "reopen_duration", *r.conf.ReopenDuration)
 			return r.reopen(issue.Key, logger)
 		}
 	}
 
-	level.Info(logger).Log("msg", "no recent matching issue found, creating new issue", "label", issueLabel)
+	level.Info(logger).Log("msg", "no recent matching issue found, creating new issue", "label", groupID)
+	customFields := tcontainer.NewMarshalMap()
+	customFields[r.conf.GroupFieldID] = []string{
+		groupID,
+	}
+
 	issue = &jira.Issue{
 		Fields: &jira.IssueFields{
 			Project:     jira.Project{Key: project},
@@ -84,7 +94,7 @@ func (r *Receiver) Notify(data *alertmanager.Data, logger log.Logger) (bool, err
 			Labels: []string{
 				issueLabel,
 			},
-			Unknowns: tcontainer.NewMarshalMap(),
+			Unknowns: customFields,
 		},
 	}
 	if r.conf.Priority != "" {
@@ -106,10 +116,6 @@ func (r *Receiver) Notify(data *alertmanager.Data, logger log.Logger) (bool, err
 		}
 	}
 
-	for key, value := range r.conf.Fields {
-		issue.Fields.Unknowns[key] = deepCopyWithTemplate(value, r.tmpl, data, logger)
-	}
-
 	if err := r.tmpl.Err(); err != nil {
 		return false, err
 	}
@@ -120,49 +126,8 @@ func (r *Receiver) Notify(data *alertmanager.Data, logger log.Logger) (bool, err
 	return retry, err
 }
 
-// deepCopyWithTemplate returns a deep copy of a map/slice/array/string/int/bool or combination thereof, executing the
-// provided template (with the provided data) on all string keys or values. All maps are connverted to
-// map[string]interface{}, with all non-string keys discarded.
-func deepCopyWithTemplate(value interface{}, tmpl *template.Template, data interface{}, logger log.Logger) interface{} {
-	if value == nil {
-		return value
-	}
-
-	valueMeta := reflect.ValueOf(value)
-	switch valueMeta.Kind() {
-
-	case reflect.String:
-		return tmpl.Execute(value.(string), data, logger)
-
-	case reflect.Array, reflect.Slice:
-		arrayLen := valueMeta.Len()
-		converted := make([]interface{}, arrayLen)
-		for i := 0; i < arrayLen; i++ {
-			converted[i] = deepCopyWithTemplate(valueMeta.Index(i).Interface(), tmpl, data, logger)
-		}
-		return converted
-
-	case reflect.Map:
-		keys := valueMeta.MapKeys()
-		converted := make(map[string]interface{}, len(keys))
-
-		for _, keyMeta := range keys {
-			strKey, isString := keyMeta.Interface().(string)
-			if !isString {
-				continue
-			}
-			strKey = tmpl.Execute(strKey, data, logger)
-			converted[strKey] = deepCopyWithTemplate(valueMeta.MapIndex(keyMeta).Interface(), tmpl, data, logger)
-		}
-		return converted
-
-	default:
-		return value
-	}
-}
-
-// toIssueLabel returns the group labels in the form of an ALERT metric name, with all spaces removed.
-func toIssueLabel(groupLabels alertmanager.KV) string {
+// toGroupID returns the group labels in the form of an ALERT metric name, with all spaces removed.
+func toGroupID(groupLabels alertmanager.KV) string {
 	buf := bytes.NewBufferString("ALERT{")
 	for _, p := range groupLabels.SortedPairs() {
 		buf.WriteString(p.Name)
@@ -173,8 +138,18 @@ func toIssueLabel(groupLabels alertmanager.KV) string {
 	return strings.Replace(buf.String(), " ", "", -1)
 }
 
-func (r *Receiver) search(project, issueLabel string, logger log.Logger) (*jira.Issue, bool, error) {
-	query := fmt.Sprintf("project=\"%s\" and labels=%q order by resolutiondate desc", project, issueLabel)
+// toIssueLabel extracts the one group label field that we want to use as the Jira label.
+func toIssueLabel(labelKey string, groupLabels alertmanager.KV) (string, error) {
+	for _, p := range groupLabels.SortedPairs() {
+		if p.Name == labelKey {
+			return p.Value, nil
+		}
+	}
+	return "", errors.New("label key not found")
+}
+
+func (r *Receiver) search(project, groupID string, logger log.Logger) (*jira.Issue, bool, error) {
+	query := fmt.Sprintf("project=\"%s\" and %q=%q order by resolutiondate desc", project, r.conf.GroupFieldName, groupID)
 	options := &jira.SearchOptions{
 		Fields:     []string{"summary", "status", "resolution", "resolutiondate"},
 		MaxResults: 2,
