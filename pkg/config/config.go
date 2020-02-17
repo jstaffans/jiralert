@@ -2,8 +2,6 @@ package config
 
 import (
 	"fmt"
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
 	"io/ioutil"
 	"net/url"
 	"path/filepath"
@@ -11,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 
 	"github.com/trivago/tgo/tcontainer"
 	"gopkg.in/yaml.v2"
@@ -100,6 +101,11 @@ type ReceiverConfig struct {
 
 	// Label copy settings
 	AddGroupLabels bool `yaml:"add_group_labels" json:"add_group_labels"`
+
+	// Jiralert integration settings
+	GroupFieldID   string `yaml:"group_field_id" json:"group_field_id"`
+	GroupFieldName string `yaml:"group_field_name" json:"group_field_name"`
+	LabelKey       string `yaml:"label_key" json:"label_key"`
 
 	// Catches all undefined fields and must be empty after parsing.
 	XXX map[string]interface{} `yaml:",inline" json:"-"`
