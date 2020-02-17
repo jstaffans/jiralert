@@ -45,8 +45,8 @@ tarball:
 	@rm -rf "$(RELEASE_DIR)/*"
 	@mkdir -p "$(RELEASE_DIR)"
 	@cp jiralert README.md LICENSE "$(RELEASE_DIR)"
-	@mkdir -p "$(RELEASE_WDIR)/config"
-	@cp config/* "$(RELEASE_DIR)/config"
+	@mkdir -p "$(RELEASE_DIR)/config"
+	@cp examples/* "$(RELEASE_DIR)/config"
 	@tar -zcvf "$(RELEASE).tar.gz" -C "$(RELEASE_DIR)"/.. "$(RELEASE)"
 	@rm -rf "$(RELEASE_DIR)"
 
