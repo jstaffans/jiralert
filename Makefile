@@ -1,6 +1,6 @@
 GO := go
 GOBIN       ?= ${GOPATH}/bin
-STATICCHECK := $(GOBIN)/staticcheck
+STATICCHECK := staticcheck
 
 VERSION := $(shell git describe --tags 2>/dev/null)
 ifeq "$(VERSION)" ""
@@ -15,7 +15,7 @@ DOCKER_IMAGE_NAME  := jiralert
 
 # v1.2.0
 ERRCHECK_VERSION  ?= e14f8d59a22d460d56c5ee92507cd94c78fbf274
-ERRCHECK          ?= $(GOBIN)/errcheck-$(ERRCHECK_VERSION)
+ERRCHECK          ?= errcheck
 
 all: check-go-mod clean format check errcheck build test
 
@@ -26,7 +26,7 @@ format:
 	@echo ">> formatting code"
 	@$(GO) fmt $(PACKAGES)
 
-check: $(STATICCHECK)
+check: 
 	@echo ">> running staticcheck"
 	@$(STATICCHECK) $(PACKAGES)
 
@@ -56,7 +56,7 @@ check-go-mod:
 
 # errcheck performs static analysis and returns error if any of the errors is not checked.
 .PHONY: errcheck
-errcheck: $(ERRCHECK)
+errcheck: 
 	@echo ">> errchecking the code"
 	$(ERRCHECK) -verbose -exclude .errcheck_excludes.txt ./cmd/... ./pkg/...
 
@@ -65,14 +65,3 @@ test:
 	@echo ">> running all tests."
 	@go test $(shell go list ./... | grep -v /vendor/);
 
-$(ERRCHECK):
-	@go get github.com/kisielk/errcheck@$(ERRCHECK_VERSION)
-	@mv $(GOBIN)/errcheck $(ERRCHECK)
-	@go mod tidy
-
-$(STATICCHECK):
-ifeq ($(GOBIN),)
-	@echo >&2 "GOBIN environment variable is not defined, where to put installed binaries?"; exit 1
-endif
-	@echo ">> getting staticcheck"
-	@GO111MODULE=on GOOS= GOARCH= $(GO) get -u honnef.co/go/tools/cmd/staticcheck
